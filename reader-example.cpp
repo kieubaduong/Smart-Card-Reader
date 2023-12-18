@@ -1,80 +1,60 @@
 #include <iostream>
 #include <vector>
 #include <winscard.h>
-#include <string>
 
 #pragma comment(lib, "winscard.lib")
 
+void MonitorSmartCardEvents(SCARDCONTEXT context) {
+    DWORD readerCount = SCARD_AUTOALLOCATE;
+    LPWSTR readers = NULL;
+    LONG result = SCardListReaders(context, NULL, (LPWSTR)&readers, &readerCount);
+    if (result != SCARD_S_SUCCESS) {
+        std::cerr << "Failed to list readers. Error code: " << result << std::endl;
+        return;
+    }
+
+    std::vector<SCARD_READERSTATE> readerStates;
+    LPWSTR readerName = readers;
+    while (*readerName != '\0') {
+        SCARD_READERSTATE readerState = {0};
+        readerState.szReader = readerName;
+        readerState.dwCurrentState = SCARD_STATE_UNAWARE;
+        readerStates.push_back(readerState);
+        readerName += wcslen(readerName) + 1;
+    }
+
+    while (true) {
+        result = SCardGetStatusChange(context, INFINITE, readerStates.data(), readerStates.size());
+
+        if (result == SCARD_S_SUCCESS) {
+            for (DWORD i = 0; i < readerStates.size(); ++i) {
+                if (readerStates[i].dwEventState != readerStates[i].dwCurrentState) {
+                    std::wcout << L"Reader " << readerStates[i].szReader << L" state changed." << std::endl;
+                    std::wcout << L"New state: " << readerStates[i].dwEventState << std::endl;
+                    readerStates[i].dwCurrentState = readerStates[i].dwEventState;
+                }
+            }
+        }
+        else {
+            std::cerr << "Failed to get status change. Error code: " << result << std::endl;
+            break;
+        }
+    }
+
+    SCardFreeMemory(context, readers);
+}
+
 int main() {
     SCARDCONTEXT hContext;
-    LONG result = SCardEstablishContext(SCARD_SCOPE_SYSTEM, NULL, NULL, &hContext);
+    LONG result = SCardEstablishContext(SCARD_SCOPE_USER, NULL, NULL, &hContext);
 
     if (result != SCARD_S_SUCCESS) {
         std::cerr << "Failed to establish context. Error code: " << result << std::endl;
         return 1;
     }
 
-    LPWSTR readerList = nullptr;
-    DWORD readerCount;
+    MonitorSmartCardEvents(hContext);
 
-    result = SCardListReadersW(hContext, nullptr, nullptr, &readerCount);
-
-    if (result != SCARD_S_SUCCESS) {
-        std::cerr << "Failed to list readers. Error code: " << result << std::endl;
-        SCardReleaseContext(hContext);
-        return 1;
-    }
-
-    readerList = new WCHAR[readerCount];
-    result = SCardListReadersW(hContext, nullptr, readerList, &readerCount);
-
-    if (result != SCARD_S_SUCCESS) {
-        std::cerr << "Failed to list readers. Error code: " << result << std::endl;
-        delete[] readerList;
-        SCardReleaseContext(hContext);
-        return 1;
-    }
-
-    std::wcout << L"Smart card readers:" << std::endl;
-
-    std::vector<std::wstring> readerNames;
-    LPWSTR reader = readerList;
-    while (*reader != L'\0') {
-        readerNames.push_back(reader);
-        reader += wcslen(reader) + 1;
-    }
-
-    for (size_t i = 0; i < readerNames.size(); ++i) {
-        std::wcout << L"[" << i + 1 << L"] Reader: " << readerNames[i] << std::endl;
-    }
-
-    std::wcout << L"Select a smart card reader (enter the corresponding number): ";
-    int selectedReaderIndex;
-    std::wcin >> selectedReaderIndex;
-
-    if (selectedReaderIndex > 0 && static_cast<size_t>(selectedReaderIndex) <= readerNames.size()) {
-        LPCWSTR selectedReader = readerNames[selectedReaderIndex - 1].c_str();
-        std::wcout << L"Selected reader: " << selectedReader << std::endl;
-
-        SCARDHANDLE hCard;
-        DWORD dwActiveProtocol;
-
-        result = SCardConnectW(hContext, selectedReader, SCARD_SHARE_SHARED,
-            SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1, &hCard, &dwActiveProtocol);
-
-        if (result != SCARD_S_SUCCESS) {
-            std::cerr << "Failed to connect to the smart card. Error code: " << result << std::endl;
-        }
-        else {
-            std::wcout << L"Connected to the smart card on " << selectedReader << std::endl;
-            SCardDisconnect(hCard, SCARD_LEAVE_CARD);
-        }
-    }
-    else {
-        std::wcerr << L"Invalid selection." << std::endl;
-    }
-
-    delete[] readerList;
     SCardReleaseContext(hContext);
 
     return 0;
